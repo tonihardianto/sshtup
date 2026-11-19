@@ -11,9 +11,9 @@ pub fn align(frame: &impl HasWindowHandle) {
     unsafe {
         let view: &NSView = &*(h.ns_view.as_ptr() as *const NSView);
         let Some(win) = view.window() else { return };
-        let Some(close) = win.standardWindowButton(NSWindowButton::NSWindowCloseButton) else { return };
-        let Some(mini) = win.standardWindowButton(NSWindowButton::NSWindowMiniaturizeButton) else { return };
-        let Some(zoom) = win.standardWindowButton(NSWindowButton::NSWindowZoomButton) else { return };
+        let Some(close) = win.standardWindowButton(NSWindowButton::CloseButton) else { return };
+        let Some(mini) = win.standardWindowButton(NSWindowButton::MiniaturizeButton) else { return };
+        let Some(zoom) = win.standardWindowButton(NSWindowButton::ZoomButton) else { return };
         let Some(bar) = close.superview() else { return };
         let Some(container) = bar.superview() else { return };
         let win_h = win.frame().size.height;
