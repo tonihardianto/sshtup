@@ -160,6 +160,7 @@ pub fn host_card(ui: &mut egui::Ui, width: f32, c: &HostCardIn) -> CardAct {
     let size = Vec2::new(width, c.height());
     let out = card(ui, size, false);
     let rect = out.rect;
+    crate::ui::drag_source(&out.resp, "host", h.id, &h.display_label(), &format!("{}:{}", h.address, h.effective_port()), &avatar_text(&h.label, &h.address), c.color);
     let p = ui.painter().clone();
     let mut act = CardAct::None;
     if out.resp.clicked() || (out.resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
