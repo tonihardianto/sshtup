@@ -793,13 +793,17 @@ impl App {
         // breadcrumb: only inside a group, where it is the way back up (at the top it would be a label with no use)
         if self.cur_group.is_some() {
             ui.horizontal(|ui| {
-                if ui.add(egui::Label::new(RichText::new("All hosts").size(13.0).color(BLUE())).sense(Sense::click())).clicked() {
+                let r = ui.add(egui::Label::new(RichText::new("All hosts").size(13.0).color(BLUE())).sense(Sense::click()));
+                self.drop_target(ui, &r, None);
+                if r.clicked() {
                     acts.push(HAct::OpenGroup(None));
                 }
                 let path: Vec<(u64, String)> = self.vault.group_path(self.cur_group).iter().map(|g| (g.id, g.name.clone())).collect();
                 for (id, name) in path {
                     label_muted(ui, "›");
-                    if ui.add(egui::Label::new(RichText::new(name).size(13.0).color(BLUE())).sense(Sense::click())).clicked() {
+                    let r = ui.add(egui::Label::new(RichText::new(name).size(13.0).color(BLUE())).sense(Sense::click()));
+                    self.drop_target(ui, &r, Some(id));
+                    if r.clicked() {
                         acts.push(HAct::OpenGroup(Some(id)));
                     }
                 }
@@ -869,6 +873,8 @@ impl App {
                     for g in &groups {
                         let n = self.vault.hosts.iter().filter(|h| h.group == Some(g.id)).count();
                         let (c, e) = item_card(ui, size, &g.name, &format!("{} host{}", n, if n == 1 { "" } else { "s" }), "icon:group", icon_color(&g.name), None, "Edit", 40.0, false);
+                        crate::ui::drag_source(&c, "group", g.id, &g.name, &format!("{} host{}", n, if n == 1 { "" } else { "s" }), "icon:group", icon_color(&g.name));
+                        self.drop_target(ui, &c, Some(g.id));
                         c.context_menu(|ui| {
                             if icon_text_button(ui, crate::icons::Icon::Pencil, "Edit").clicked() {
                                 acts.push(HAct::EditGroup(g.id));
@@ -933,8 +939,34 @@ impl App {
         });
     }
 
+    /// Whether the dragged item may be dropped into `target` (None: the top level).
+    fn drop_ok(&self, d: &crate::ui::DragItem, target: Option<u64>) -> bool {
+        if self.item_read_only(d.kind, d.id) {
+            return false;
+        }
+        match target {
+            Some(g) => self.group_targets(d.kind, d.id).iter().any(|t| t.0 == g),
+            None => {
+                if d.kind == "host" { self.vault.host(Some(d.id)).and_then(|h| h.group).is_some() } else { self.vault.groups.iter().find(|g| g.id == d.id).and_then(|g| g.parent).is_some() }
+            }
+        }
+    }
+
+    /// Makes `r` a drop target for a dragged host or group: outlines it when the drop would be accepted and moves the item on release.
+    fn drop_target(&self, ui: &egui::Ui, r: &egui::Response, target: Option<u64>) {
+        let Some(d) = crate::ui::dragging(ui.ctx()) else { return };
+        if !r.contains_pointer() || !self.drop_ok(&d, target) {
+            return;
+        }
+        crate::ui::drop_highlight(ui, r.rect);
+        if ui.input(|i| i.pointer.any_released()) {
+            ui.ctx().data_mut(|d2| d2.insert_temp(egui::Id::new("group_req"), (d.kind.to_string(), d.id, target)));
+        }
+    }
+
     /// Carries out a "Move to group" chosen in a menu. An item moved into a team's group joins that team.
     pub(crate) fn group_move_pump(&mut self, ctx: &egui::Context) {
+        crate::ui::drag_ghost(ctx);
         let Some((kind, id, target)) = ctx.data_mut(|d| d.remove_temp::<(String, u64, Option<u64>)>(egui::Id::new("group_req"))) else { return };
         if self.item_read_only(&kind, id) {
             return;

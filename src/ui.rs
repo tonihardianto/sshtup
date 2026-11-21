@@ -407,7 +407,7 @@ pub struct CardOut {
 
 /// A clickable card; the caller draws the contents with the returned painter and rect.
 pub fn card(ui: &mut egui::Ui, size: Vec2, selected: bool) -> CardOut {
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let hovered = resp.hovered();
     let fill = if hovered { CARD_HOVER() } else { CARD() };
     ui.painter().rect_filled(rect, 10.0, fill);
@@ -417,6 +417,63 @@ pub fn card(ui: &mut egui::Ui, size: Vec2, selected: bool) -> CardOut {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     CardOut { resp, rect }
+}
+
+/// What is being dragged from a host or group card onto a group (drag and drop into groups).
+/// It carries what is needed to draw a copy of the card under the pointer.
+pub struct DragItem {
+    pub kind: &'static str,
+    pub id: u64,
+    pub name: String,
+    pub sub: String,
+    pub glyph: String,
+    pub color: Color32,
+    /// where the card was, and where on it the pointer took hold
+    pub src: Rect,
+    pub grab: Vec2,
+}
+
+/// Starts dragging from `resp` once the pointer has moved far enough to count as a drag.
+pub fn drag_source(resp: &egui::Response, kind: &'static str, id: u64, name: &str, sub: &str, glyph: &str, color: Color32) {
+    if resp.drag_started() {
+        let at = resp.interact_pointer_pos().unwrap_or(resp.rect.center());
+        resp.dnd_set_drag_payload(DragItem { kind, id, name: name.to_string(), sub: sub.to_string(), glyph: glyph.to_string(), color, src: resp.rect, grab: at - resp.rect.min });
+    }
+}
+
+/// The item being dragged right now, if any.
+pub fn dragging(ctx: &egui::Context) -> Option<std::sync::Arc<DragItem>> {
+    egui::DragAndDrop::payload::<DragItem>(ctx)
+}
+
+/// While something is dragged: dims the card it came from and draws a lifted copy of it that follows the pointer.
+pub fn drag_ghost(ctx: &egui::Context) {
+    let Some(d) = dragging(ctx) else { return };
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    let Some(pos) = ctx.pointer_latest_pos() else { return };
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("dnd_ghost")));
+    p.rect_filled(d.src, 10.0, BG_CONTENT().linear_multiply(0.6));
+    let size = Vec2::new(d.src.width().min(300.0), d.src.height().min(64.0));
+    let r = Rect::from_min_size(pos - d.grab.min(size), size);
+    p.rect_filled(r.translate(Vec2::new(0.0, 4.0)).expand(1.0), 12.0, Color32::from_black_alpha(70));
+    p.rect_filled(r, 10.0, CARD_HOVER());
+    p.rect_stroke(r, 10.0, Stroke::new(1.5, BLUE()), StrokeKind::Inside);
+    let bs = (size.y - 16.0).min(40.0);
+    let badge_rect = Rect::from_min_size(r.min + Vec2::new(12.0, (size.y - bs) / 2.0), Vec2::splat(bs));
+    badge(&p, badge_rect, &d.glyph, d.color);
+    let tx = badge_rect.right() + 12.0;
+    let pc = p.with_clip_rect(Rect::from_min_max(Pos2::new(tx, r.top()), Pos2::new(r.right() - 8.0, r.bottom())));
+    if d.sub.is_empty() {
+        pc.text(Pos2::new(tx, r.center().y), Align2::LEFT_CENTER, &d.name, FontId::proportional(14.0), TEXT());
+    } else {
+        pc.text(Pos2::new(tx, r.center().y - 8.0), Align2::LEFT_CENTER, &d.name, FontId::proportional(14.0), TEXT());
+        pc.text(Pos2::new(tx, r.center().y + 9.0), Align2::LEFT_CENTER, &d.sub, FontId::proportional(11.5), MUTED());
+    }
+}
+
+/// Outlines a drop target that would accept what is being dragged.
+pub fn drop_highlight(ui: &egui::Ui, rect: Rect) {
+    ui.painter().rect_stroke(rect, 10.0, Stroke::new(2.0, BLUE()), StrokeKind::Inside);
 }
 
 pub fn status_dot(painter: &egui::Painter, center: Pos2, color: Color32) {
