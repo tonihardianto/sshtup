@@ -388,6 +388,37 @@ pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// True when a private key file can be read by other users, which makes ssh ignore it.
+pub fn key_perms_too_open(path: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if path.is_empty() {
+            return false;
+        }
+        return std::fs::metadata(path).map(|m| m.is_file() && m.permissions().mode() & 0o077 != 0).unwrap_or(false);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Sets a key file to mode 600.
+pub fn fix_key_perms(path: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 pub fn data_dir() -> PathBuf {
     if let Ok(p) = std::env::var("SSHTUP_HOME") {
         return PathBuf::from(p);
@@ -518,6 +549,20 @@ pub fn demo_vault() -> Vault {
 
 #[cfg(test)]
 mod vault_file_tests {
+    #[cfg(unix)]
+    #[test]
+    fn open_key_permissions_are_detected_and_fixed() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("sshtup-perm-{}", std::process::id()));
+        std::fs::write(&p, "x").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let ps = p.to_string_lossy().to_string();
+        assert!(key_perms_too_open(&ps));
+        fix_key_perms(&ps).unwrap();
+        assert!(!key_perms_too_open(&ps));
+        std::fs::remove_file(&p).unwrap();
+    }
+
     use super::*;
     use crate::vaultcrypt::{decrypt, VaultKey};
 
