@@ -587,11 +587,17 @@ impl App {
                 let tried = tried_save(ui);
                 if self.editor_new {
                     if let Some(p) = key_drop_zone(ui) {
-                        if k.label.trim().is_empty() {
-                            k.label = p.rsplit('/').next().unwrap_or("").to_string();
+                        // a dropped key is copied into the app, like Import: the original is never read by ssh
+                        match copy_key_into_app(&p) {
+                            Ok((dest, public_key, name)) => {
+                                if k.label.trim().is_empty() {
+                                    k.label = name;
+                                }
+                                k.path = dest;
+                                k.public_key = public_key;
+                            }
+                            Err(e) => self.notify(e, RED()),
                         }
-                        k.path = p;
-                        k.public_key.clear();
                     }
                     ui.add_space(2.0);
                 }
@@ -599,6 +605,16 @@ impl App {
                 let err = (tried && k.label.trim().is_empty()).then_some("Enter a label.");
                 text_field_ex(ui, "Label", true, err, Some(Icon::Pencil), &mut k.label, "id_ed25519", false);
                 text_field_ex(ui, "Private key file", false, None, Some(Icon::File), &mut k.path, "~/.ssh/id_ed25519", false);
+                if crate::model::key_perms_too_open(&expand_home(&k.path)) {
+                    ui.add_space(2.0);
+                    ui.label(RichText::new("Other users can read this key file, so ssh will ignore it.").size(12.0).color(RED()));
+                    if flat_button(ui, "Fix permissions (chmod 600)").clicked() {
+                        match crate::model::fix_key_perms(&expand_home(&k.path)) {
+                            Ok(()) => self.notify("Key permissions set to 600".into(), GREEN()),
+                            Err(e) => self.notify(format!("Cannot change the permissions: {e}"), RED()),
+                        }
+                    }
+                }
                 text_field_ex(ui, "Passphrase", false, None, Some(Icon::Lock), &mut k.passphrase, "Optional", true);
                 ui.add_space(4.0);
                 ui.checkbox(&mut k.sync_contents, "Also sync this key file to my other devices (encrypted)");
@@ -1253,36 +1269,7 @@ impl App {
     }
 
     fn import_key_file(&mut self, st: &KeyImport) -> Result<String, String> {
-        let src = expand_home(st.path.trim());
-        if src.is_empty() {
-            return Err("Choose a key file first".into());
-        }
-        let bytes = std::fs::read(&src).map_err(|e| format!("Cannot read the file: {e}"))?;
-        let text = String::from_utf8_lossy(&bytes);
-        if !text.contains("PRIVATE KEY") {
-            return Err("That file does not look like a private key".into());
-        }
-        let name = src.rsplit('/').next().unwrap_or("key").to_string();
-        let dir = data_dir().join("keys");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create the key folder: {e}"))?;
-        let base = sanitize(&name);
-        let mut dest = dir.join(&base);
-        let mut n = 2;
-        while dest.exists() {
-            dest = dir.join(format!("{base}-{n}"));
-            n += 1;
-        }
-        std::fs::write(&dest, &bytes).map_err(|e| format!("Cannot save the key: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
-        }
-        let dest_s = dest.to_string_lossy().to_string();
-        let public_key = std::fs::read_to_string(format!("{src}.pub")).map(|s| s.trim().to_string()).unwrap_or_default();
-        if !public_key.is_empty() {
-            let _ = std::fs::write(format!("{dest_s}.pub"), format!("{public_key}\n"));
-        }
+        let (dest_s, public_key, name) = copy_key_into_app(&st.path)?;
         let label = if st.label.trim().is_empty() { name } else { st.label.trim().to_string() };
         let id = self.vault.new_id();
         self.vault.keys.push(SshKey { id, label: label.clone(), path: dest_s, passphrase: st.passphrase.clone(), public_key, sync_contents: false, added: now_secs(), generated: false });
@@ -1549,7 +1536,43 @@ impl App {
     }
 }
 
-/// "Drop a key file here to fill in the path": returns the path of a file dropped on it.
+/// Copies a private key file into the app's own key folder (mode 600) so the original can stay where it is.
+/// Returns (path of the copy, public key text if a `.pub` sits beside the original, original file name).
+fn copy_key_into_app(path: &str) -> Result<(String, String, String), String> {
+    let src = expand_home(path.trim());
+    if src.is_empty() {
+        return Err("Choose a key file first".into());
+    }
+    let bytes = std::fs::read(&src).map_err(|e| format!("Cannot read the file: {e}"))?;
+    let text = String::from_utf8_lossy(&bytes);
+    if !text.contains("PRIVATE KEY") {
+        return Err("That file does not look like a private key".into());
+    }
+    let name = src.rsplit('/').next().unwrap_or("key").to_string();
+    let dir = data_dir().join("keys");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create the key folder: {e}"))?;
+    let base = sanitize(&name);
+    let mut dest = dir.join(&base);
+    let mut n = 2;
+    while dest.exists() {
+        dest = dir.join(format!("{base}-{n}"));
+        n += 1;
+    }
+    std::fs::write(&dest, &bytes).map_err(|e| format!("Cannot save the key: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
+    }
+    let dest_s = dest.to_string_lossy().to_string();
+    let public_key = std::fs::read_to_string(format!("{src}.pub")).map(|s| s.trim().to_string()).unwrap_or_default();
+    if !public_key.is_empty() {
+        let _ = std::fs::write(format!("{dest_s}.pub"), format!("{public_key}\n"));
+    }
+    Ok((dest_s, public_key, name))
+}
+
+/// "Drop a key file here to import it": returns the path of a file dropped on it.
 fn key_drop_zone(ui: &mut egui::Ui) -> Option<String> {
     let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), egui::Sense::hover());
     let over = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());

@@ -507,10 +507,17 @@ impl App {
             checks.push(("jump host address", j.address.clone()));
             checks.push(("jump host user name", j.resolved_username(&v.identities)));
         }
-        checks
-            .into_iter()
-            .find(|(_, s)| crate::model::unsafe_conn_part(s))
-            .map(|(what, _)| format!("The {what} starts with \"-\" or has control characters, so it was not used. Fix it in the host settings."))
+        if let Some(what) = checks.into_iter().find(|(_, s)| crate::model::unsafe_conn_part(s)).map(|(what, _)| what) {
+            return Some(format!("The {what} starts with \"-\" or has control characters, so it was not used. Fix it in the host settings."));
+        }
+        let key = h.identity.and_then(|i| v.identities.iter().find(|x| x.id == i)).and_then(|i| i.key).or(h.key).and_then(|k| v.keys.iter().find(|x| x.id == k));
+        if let Some(k) = key {
+            let path = expand_home(&k.path);
+            if crate::model::key_perms_too_open(&path) {
+                return Some(format!("The key file {path} can be read by other users, so ssh would ignore it. Open the key in Keychain and click \"Fix permissions\"."));
+            }
+        }
+        None
     }
 
     /// The key that encrypts this session's log, when the vault is encrypted.
